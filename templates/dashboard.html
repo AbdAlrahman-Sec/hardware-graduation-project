@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Plastic Sorter</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:#0f1419; color:#e6edf3; }
+  header { padding:20px 24px; border-bottom:1px solid #243; }
+  h1 { margin:0; font-size:20px; }
+  .wrap { max-width:960px; margin:0 auto; padding:24px; }
+  .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); }
+  .card { background:#161b22; border:1px solid #2a3340; border-radius:12px; padding:18px; }
+  .card h2 { margin:0 0 14px; font-size:13px; text-transform:uppercase;
+             letter-spacing:.05em; color:#8b98a5; }
+  .badge { display:inline-block; padding:6px 12px; border-radius:999px; font-weight:600; }
+  .belt-cleaning   { background:#3a2f00; color:#f5c518; }
+  .belt-working    { background:#06351f; color:#3fb950; }
+  .belt-manual_on  { background:#0d2d52; color:#58a6ff; }
+  .belt-manual_off { background:#3a1d1d; color:#f85149; }
+  .belt-starting   { background:#222;    color:#8b98a5; }
+  .row { display:flex; justify-content:space-between; align-items:center;
+         padding:10px 0; border-bottom:1px solid #222; }
+  .row:last-child { border-bottom:0; }
+  .count { font-variant-numeric:tabular-nums; background:#21262d; border:1px solid #2a3340;
+           border-radius:6px; padding:2px 10px; font-weight:700; min-width:36px; text-align:center; }
+  .ok       { color:#3fb950; font-weight:600; }
+  .full     { color:#f85149; font-weight:600; }
+  .assigned { color:#8b98a5; font-size:12px; margin-left:6px; }
+  .rejected { color:#f5c518; font-size:12px; margin-left:6px; }
+  img#shot  { width:100%; border-radius:8px; background:#000; display:block; min-height:160px; }
+  .type     { font-size:26px; font-weight:700; margin-top:8px; }
+  button { font:inherit; font-weight:600; padding:10px 16px; border-radius:8px;
+           border:1px solid #2a3340; background:#21262d; color:#e6edf3;
+           cursor:pointer; margin:4px 4px 0 0; }
+  button:hover  { background:#2d333b; }
+  button.on     { background:#06351f; border-color:#06492a; }
+  button.off    { background:#3a1d1d; border-color:#5a2a2a; }
+  button.save   { background:#0d2d52; border-color:#1a4a80; }
+  button.save:hover { background:#1a3a6a; }
+  .muted { color:#8b98a5; font-size:13px; }
+  select.route-select {
+    font:inherit; font-size:13px; padding:6px 10px; border-radius:8px;
+    border:1px solid #2a3340; background:#21262d; color:#e6edf3; cursor:pointer;
+  }
+  select.route-select:focus { outline:none; border-color:#58a6ff; }
+  #manualWarn { display:none; margin:0 0 16px; padding:12px 16px; border-radius:8px;
+                background:#3a2f00; color:#f5c518; font-weight:600; }
+  .route-label { font-size:14px; font-weight:600; }
+</style>
+</head>
+<body>
+<header><h1>♻️ Smart Plastic Sorter</h1></header>
+<div class="wrap">
+
+  <div id="manualWarn">⚠️ Manual mode — sorting is paused. Press "Back to Auto" to resume.</div>
+
+  <div class="grid">
+
+    <!-- Belt status -->
+    <div class="card">
+      <h2>Belt status</h2>
+      <span id="beltBadge" class="badge belt-starting">—</span>
+      <p class="muted" id="modeText" style="margin-top:12px;"></p>
+    </div>
+
+    <!-- Containers -->
+    <div class="card">
+      <h2>Containers</h2>
+      <div id="bins"></div>
+      <p class="muted" id="total" style="margin-top:12px;"></p>
+    </div>
+
+    <!-- Manual control -->
+    <div class="card">
+      <h2>Manual control</h2>
+      <button class="on"  onclick="sendCmd('BELT_ON')">Move belt</button>
+      <button class="off" onclick="sendCmd('BELT_OFF')">Stop belt</button>
+      <button onclick="sendCmd('AUTO')">Back to Auto</button>
+      <p class="muted" id="cmdMsg" style="margin-top:12px;"></p>
+    </div>
+
+    <!-- Last sorted -->
+    <div class="card">
+      <h2>Last sorted item</h2>
+      <div class="type" id="lastSorted">—</div>
+      <p class="muted" id="lastSortedWhere"></p>
+    </div>
+
+    <!-- Routing config -->
+    <div class="card" style="grid-column:1/-1;">
+      <h2>Routing — assign plastic types to containers</h2>
+      <div id="routingRows"></div>
+      <div style="margin-top:14px;">
+        <button class="save" onclick="saveRouting()">Save routing</button>
+        <p class="muted" id="routingMsg" style="display:inline; margin-left:12px;"></p>
+      </div>
+    </div>
+
+    <!-- Last image -->
+    <div class="card" style="grid-column:1/-1;">
+      <h2>Last image taken</h2>
+      <img id="shot" alt="waiting for first scan…">
+      <p class="muted" id="lastType" style="margin-top:8px;"></p>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const PLASTIC_TYPES   = ['PET', 'HDPE', 'PP', 'OTHER'];
+const STATION_LABELS  = { 0: 'Reject', 1: 'Container 1', 2: 'Container 2' };
+let lastTs            = 0;
+let currentRouting    = {};
+let routingFormBuilt  = false;
+
+// ---------- routing form ----------
+function buildRoutingForm(routing) {
+  // Only rebuild if routing actually changed (avoids resetting open dropdowns)
+  if (JSON.stringify(routing) === JSON.stringify(currentRouting) && routingFormBuilt) return;
+  currentRouting   = Object.assign({}, routing);
+  routingFormBuilt = true;
+
+  const div = document.getElementById('routingRows');
+  div.innerHTML = '';
+  for (const type of PLASTIC_TYPES) {
+    const val = routing[type] ?? 0;
+    div.innerHTML += `
+      <div class="row">
+        <span class="route-label">${type}</span>
+        <select id="route_${type}" class="route-select">
+          <option value="0" ${val===0?'selected':''}>⛔ Reject</option>
+          <option value="1" ${val===1?'selected':''}>📦 Container 1</option>
+          <option value="2" ${val===2?'selected':''}>📦 Container 2</option>
+        </select>
+      </div>`;
+  }
+}
+
+async function saveRouting() {
+  const data = {};
+  for (const type of PLASTIC_TYPES) {
+    const sel = document.getElementById('route_' + type);
+    if (sel) data[type] = parseInt(sel.value);
+  }
+  const r = await fetch('/routing', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  });
+  const j = await r.json();
+  const msg = document.getElementById('routingMsg');
+  if (j.ok) {
+    currentRouting = j.routing;
+    msg.textContent = '✓ Saved!';
+    msg.style.color = '#3fb950';
+  } else {
+    msg.textContent = 'Error: ' + j.error;
+    msg.style.color = '#f85149';
+  }
+  setTimeout(() => { msg.textContent = ''; }, 3000);
+}
+
+// ---------- main refresh ----------
+async function refresh() {
+  try {
+    const s = await (await fetch('/status')).json();
+
+    // belt status
+    const badge = document.getElementById('beltBadge');
+    badge.className = 'badge belt-' + s.belt;
+    const beltLabels = {
+      cleaning:    'Cleaning belt',
+      working:     'Working',
+      manual_on:   'Manual — running',
+      manual_off:  'Manual — stopped',
+      starting:    'Starting up'
+    };
+    badge.textContent = beltLabels[s.belt] || s.belt;
+    document.getElementById('modeText').textContent = 'Mode: ' + s.mode;
+    document.getElementById('manualWarn').style.display =
+        s.mode === 'manual' ? 'block' : 'none';
+
+    // routing form
+    if (s.routing) buildRoutingForm(s.routing);
+
+    // build a reverse map: station number → list of types assigned to it
+    const stationTypes = {};
+    if (s.routing) {
+      for (const [type, station] of Object.entries(s.routing)) {
+        if (station > 0) {
+          if (!stationTypes[station]) stationTypes[station] = [];
+          stationTypes[station].push(type);
+        }
+      }
+    }
+
+    // containers + counters
+    const bins  = document.getElementById('bins');
+    let   total = 0;
+    bins.innerHTML = '';
+    for (const num of ['1', '2']) {
+      const full    = s.containers[num];
+      const count   = (s.counts && s.counts[num]) ? s.counts[num] : 0;
+      const types   = (stationTypes[parseInt(num)] || []).join(', ') || 'None';
+      const fullTag = full ? ' <span class="rejected">⛔ FULL — items redirected</span>' : '';
+      total += count;
+      bins.innerHTML += `
+        <div class="row">
+          <span>
+            Container ${num}
+            <span class="assigned">(${types})</span>
+            <span class="${full ? 'full' : 'ok'}">${full ? ' FULL' : ' OK'}</span>
+            ${fullTag}
+          </span>
+          <span class="count">${count}</span>
+        </div>`;
+    }
+    document.getElementById('total').textContent = 'Total sorted: ' + total;
+
+    // last sorted
+    document.getElementById('lastSorted').textContent = s.last_sorted || '—';
+    const where = s.last_station > 0
+        ? '→ Container ' + s.last_station
+        : (s.last_sorted ? '→ Rejected' : '');
+    document.getElementById('lastSortedWhere').textContent = where;
+
+    // last image
+    document.getElementById('lastType').textContent =
+        s.last_type ? ('Detected: ' + s.last_type) : '';
+    if (s.last_image_ts && s.last_image_ts !== lastTs) {
+      lastTs = s.last_image_ts;
+      document.getElementById('shot').src = '/image?t=' + s.last_image_ts;
+    }
+  } catch (e) { /* keep trying */ }
+}
+
+async function sendCmd(cmd) {
+  const r = await fetch('/command', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({cmd})
+  });
+  const j = await r.json();
+  document.getElementById('cmdMsg').textContent =
+      j.ok ? 'Sent: ' + cmd : 'Error: ' + j.error;
+  refresh();
+}
+
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>
