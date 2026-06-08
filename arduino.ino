@@ -1,20 +1,4 @@
-/*
-  Smart Plastic Sorter  -  Arduino (Mega 2560)
-  Works together with the Raspberry Pi Flask app (app.py)
 
-  ---------------------------------------------------------------
-  COMMUNICATION
-  ---------------------------------------------------------------
-    Arduino -> Pi :  "SCAN"
-    Pi      -> Arduino :  "0" | "1" | "2"   (station to push at, 0 = reject)
-    Pi -> Arduino: "CMD:BELT_ON" | "CMD:BELT_OFF" | "CMD:AUTO"
-    Arduino -> Pi: "STATUS:WORKING", "BELT MANUAL ON/OFF",
-                   "CLEANING BELT...", "BELT CLEAR",
-                   "BIN1 FULL/OK", "SORTED:n", "MANUAL_DROP:n"
-
-  NOTE: Routing is now fully handled by the Pi/dashboard.
-        The Arduino just receives a station number and pushes.
-*/
 
 // ===================== PINS =====================
 #define STEP1 22
